@@ -1,9 +1,10 @@
+// lib/screens/cart_screen.dart
 import 'package:flutter/material.dart';
-import 'package:flutter_application_1/widets/cart_item_card.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:provider/provider.dart';
 
-import '../models/cart_item.dart';
-import '../utils/database_helper.dart';
+import '../providers/auth_provider.dart';
+import '../providers/cart_provider.dart';
+import '../widgets/cart_item_card.dart';
 
 class CartScreen extends StatefulWidget {
   const CartScreen({Key? key}) : super(key: key);
@@ -13,133 +14,38 @@ class CartScreen extends StatefulWidget {
 }
 
 class _CartScreenState extends State<CartScreen> {
-  final DatabaseHelper _dbHelper = DatabaseHelper();
-  List<CartItem> _cartItems = [];
-  bool _isLoading = true;
-  int _userId = 0;
-  double _total = 0.0;
+  bool _didFetch = false;
 
   @override
-  void initState() {
-    super.initState();
-    _loadUserId();
-  }
-
-  Future<void> _loadUserId() async {
-    final prefs = await SharedPreferences.getInstance();
-    final userId = prefs.getInt('userId') ?? 0;
-    
-    setState(() {
-      _userId = userId;
-    });
-    
-    await _loadCartItems();
-  }
-
-  Future<void> _loadCartItems() async {
-    if (_userId == 0) return;
-    
-    setState(() {
-      _isLoading = true;
-    });
-
-    try {
-      final cartItems = await _dbHelper.getCartItems(_userId);
-      double total = 0.0;
-      
-      for (var item in cartItems) {
-        total += item.total;
-      }
-      
-      setState(() {
-        _cartItems = cartItems;
-        _total = total;
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_didFetch) {
+      _didFetch = true;
+      // تأجيل الطلب حتى انتهاء البناء
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final user = context.read<AuthProvider>().user;
+        if (user != null) {
+          context.read<CartProvider>().loadCart(user.id!);
+        }
       });
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error loading cart: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<void> _updateQuantity(CartItem item, int quantity) async {
-    if (quantity <= 0) {
-      await _removeItem(item);
-      return;
-    }
-
-    try {
-      await _dbHelper.updateCartItemQuantity(item.id!, quantity);
-      await _loadCartItems();
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error updating quantity: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-
-  Future<void> _removeItem(CartItem item) async {
-    try {
-      await _dbHelper.removeFromCart(item.id!);
-      await _loadCartItems();
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${item.productName} removed from cart'),
-            backgroundColor: Theme.of(context).colorScheme.primary,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error removing item: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _clearCart() async {
-    try {
-      await _dbHelper.clearCart(_userId);
-      await _loadCartItems();
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Cart cleared'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error clearing cart: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
     }
   }
 
   Future<void> _checkout() async {
-    if (_cartItems.isEmpty) {
+    final auth = context.read<AuthProvider>();
+    final user = auth.user;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please log in to checkout'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final cartProv = context.read<CartProvider>();
+    if (cartProv.items.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Your cart is empty'),
@@ -148,74 +54,54 @@ class _CartScreenState extends State<CartScreen> {
       );
       return;
     }
-    
-    // Show checkout confirmation
-    showDialog(
+
+    final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Checkout'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Total: \$${_total.toStringAsFixed(2)}'),
-            const SizedBox(height: 16),
-            const Text('Would you like to proceed with the purchase?'),
-          ],
-        ),
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirm Checkout'),
+        content: Text('Total: \$${cartProv.total.toStringAsFixed(2)}'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              // Process order
-              _processOrder();
-            },
+            onPressed: () => Navigator.of(ctx).pop(true),
             child: const Text('Confirm'),
           ),
         ],
       ),
     );
-  }
+    if (confirmed != true) return;
 
-  Future<void> _processOrder() async {
-    // Show loading indicator
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(),
-      ),
+      builder: (_) => const Center(child: CircularProgressIndicator()),
     );
-    
-    // Simulate processing delay
-    await Future.delayed(const Duration(seconds: 2));
-    
-    // Clear cart after successful order
-    await _dbHelper.clearCart(_userId);
-    
-    if (mounted) {
-      // Close loading dialog
-      Navigator.pop(context);
-      
-      // Show success message
-      showDialog(
+
+    try {
+      await cartProv.clearCart(user.id!);
+      Navigator.of(context).pop(); // close loading
+      await showDialog(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Order Placed'),
-          content: const Text('Your order has been successfully placed!'),
+        builder: (ctx) => AlertDialog(
+          title: const Text('Success'),
+          content: const Text('Order placed successfully!'),
           actions: [
             ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _loadCartItems();
-              },
+              onPressed: () => Navigator.of(ctx).pop(),
               child: const Text('OK'),
             ),
           ],
+        ),
+      );
+    } catch (e) {
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Checkout failed: $e'),
+          backgroundColor: Colors.red,
         ),
       );
     }
@@ -223,43 +109,29 @@ class _CartScreenState extends State<CartScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    final user = auth.user;
+    if (user == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Your Cart')),
+        body: const Center(child: Text('Please log in to view your cart')),
+      );
+    }
+
+    final cartProv = context.watch<CartProvider>();
+    final items = cartProv.items;
+    final isLoading = cartProv.isLoading;
+    final total = cartProv.total;
+
     return Scaffold(
-      body: _isLoading
+      appBar: AppBar(title: const Text('Your Cart')),
+      body: isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _cartItems.isEmpty
+          : items.isEmpty
               ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.shopping_cart_outlined,
-                        size: 80,
-                        color: Colors.grey.withOpacity(0.5),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Your cart is empty',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: Colors.grey,
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      ElevatedButton(
-                        onPressed: () {
-                          // Navigate to home tab
-                          final mainScreenState = context.findAncestorStateOfType<State>();
-                          if (mainScreenState != null) {
-                            // This is a bit of a hack to change the tab
-                            // In a real app, you might use a state management solution
-                            final bottomNavBar = mainScreenState.context.findAncestorWidgetOfExactType<BottomNavigationBar>();
-                            if (bottomNavBar != null) {
-                              bottomNavBar.onTap!(0);
-                            }
-                          }
-                        },
-                        child: const Text('Browse Plants'),
-                      ),
-                    ],
+                  child: Text(
+                    'Your cart is empty',
+                    style: Theme.of(context).textTheme.bodyLarge,
                   ),
                 )
               : Column(
@@ -267,13 +139,13 @@ class _CartScreenState extends State<CartScreen> {
                     Expanded(
                       child: ListView.builder(
                         padding: const EdgeInsets.all(16),
-                        itemCount: _cartItems.length,
-                        itemBuilder: (context, index) {
-                          final item = _cartItems[index];
+                        itemCount: items.length,
+                        itemBuilder: (ctx, i) {
+                          final ci = items[i];
                           return CartItemCard(
-                            cartItem: item,
-                            onUpdateQuantity: (quantity) => _updateQuantity(item, quantity),
-                            onRemove: () => _removeItem(item),
+                            cartItem: ci,
+                            onUpdateQuantity: (q) => context.read<CartProvider>().updateQuantity(ci.id!, q, user.id!),
+                            onRemove: () => context.read<CartProvider>().removeItem(ci.id!, user.id!),
                           );
                         },
                       ),
@@ -300,11 +172,14 @@ class _CartScreenState extends State<CartScreen> {
                                 style: Theme.of(context).textTheme.titleLarge,
                               ),
                               Text(
-                                '\$${_total.toStringAsFixed(2)}',
-                                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: Theme.of(context).colorScheme.primary,
-                                ),
+                                '\$${total.toStringAsFixed(0)}',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .headlineSmall
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                      color: Theme.of(context).colorScheme.primary,
+                                    ),
                               ),
                             ],
                           ),
@@ -313,10 +188,7 @@ class _CartScreenState extends State<CartScreen> {
                             children: [
                               Expanded(
                                 child: OutlinedButton(
-                                  onPressed: _clearCart,
-                                  style: OutlinedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(vertical: 16),
-                                  ),
+                                  onPressed: _checkout,
                                   child: const Text('Clear Cart'),
                                 ),
                               ),
@@ -324,9 +196,6 @@ class _CartScreenState extends State<CartScreen> {
                               Expanded(
                                 child: ElevatedButton(
                                   onPressed: _checkout,
-                                  style: ElevatedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(vertical: 16),
-                                  ),
                                   child: const Text('Checkout'),
                                 ),
                               ),
@@ -340,4 +209,3 @@ class _CartScreenState extends State<CartScreen> {
     );
   }
 }
-

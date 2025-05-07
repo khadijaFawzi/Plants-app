@@ -1,49 +1,72 @@
+// lib/screens/product_detail_screen.dart
+
+import 'dart:io';
+
 import 'package:flutter/material.dart';
-import '../models/cart_item.dart';
+import 'package:provider/provider.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+
 import '../models/product.dart';
-import '../utils/database_helper.dart';
+import '../models/cart_item.dart';
+import '../providers/cart_provider.dart';
+import '../providers/auth_provider.dart';
 
 class ProductDetailScreen extends StatefulWidget {
   final Product product;
-  final int userId;
 
-  const ProductDetailScreen({
-    Key? key,
-    required this.product,
-    required this.userId,
-  }) : super(key: key);
+  const ProductDetailScreen({Key? key, required this.product}) : super(key: key);
 
   @override
   State<ProductDetailScreen> createState() => _ProductDetailScreenState();
 }
 
 class _ProductDetailScreenState extends State<ProductDetailScreen> {
-  final DatabaseHelper _dbHelper = DatabaseHelper();
   int _quantity = 1;
-  bool _isAddingToCart = false;
+  bool _isAdding = false;
 
   Future<void> _addToCart() async {
-    if (_quantity <= 0) return;
-
-    setState(() {
-      _isAddingToCart = true;
-    });
-
-    try {
-      final cartItem = CartItem(
-        userId: widget.userId,
-        productId: widget.product.id!,
-        quantity: _quantity,
+    if (_quantity < 1) return;
+    final prodId = widget.product.id;
+    if (prodId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Invalid product ID'),
+          backgroundColor: Colors.red,
+        ),
       );
+      return;
+    }
 
-      await _dbHelper.addToCart(cartItem);
+    final auth = context.read<AuthProvider>();
+    final user = auth.user;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please log in first'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isAdding = true);
+    try {
+      final cartProv = context.read<CartProvider>();
+      final item = CartItem(
+        userId: user.id!,
+        productId: prodId,
+        quantity: _quantity,
+        productName: widget.product.name,
+        productPrice: widget.product.price,
+        productImage: widget.product.image,
+      );
+      await cartProv.addToCart(item);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('${widget.product.name} added to cart'),
             backgroundColor: Theme.of(context).colorScheme.primary,
-            duration: const Duration(seconds: 2),
           ),
         );
       }
@@ -51,18 +74,45 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error adding to cart: ${e.toString()}'),
+            content: Text('Error: $e'),
             backgroundColor: Colors.red,
           ),
         );
       }
     } finally {
-      if (mounted) {
-        setState(() {
-          _isAddingToCart = false;
-        });
-      }
+      if (mounted) setState(() => _isAdding = false);
     }
+  }
+
+  Widget _buildHeaderImage() {
+    final src = widget.product.image;
+    if (src.startsWith('http')) {
+      return CachedNetworkImage(
+        imageUrl: src,
+        fit: BoxFit.cover,
+        placeholder: (_, __) =>
+            const Center(child: CircularProgressIndicator()),
+        errorWidget: (_, __, ___) =>
+            Image.asset('assets/images/placeholder.png', fit: BoxFit.cover),
+      );
+    }
+
+    final file = File(src);
+    if (file.existsSync()) {
+      return Image.file(
+        file,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) =>
+            Image.asset('assets/images/placeholder.png', fit: BoxFit.cover),
+      );
+    }
+
+    return Image.asset(
+      src.isNotEmpty ? src : 'assets/images/placeholder.png',
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) =>
+          Image.asset('assets/images/placeholder.png', fit: BoxFit.cover),
+    );
   }
 
   @override
@@ -74,128 +124,115 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
             expandedHeight: 300,
             pinned: true,
             flexibleSpace: FlexibleSpaceBar(
-              background: Hero(
-                tag: 'product-${widget.product.id}',
-                child: Container(
-                  decoration: BoxDecoration(
-                    image: DecorationImage(
-                      image: AssetImage(widget.product.image),
-                      fit: BoxFit.cover,
-                    ),
-                  ),
-                  child: Container(
+              background: Stack(
+                fit: StackFit.expand,
+                children: [
+                  _buildHeaderImage(),
+                  DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Colors.black.withOpacity(0.5),
-                        ],
-                        stops: const [0.7, 1.0],
+                        colors: [Colors.transparent, Colors.black54],
+                        stops: const [0.6, 1],
                       ),
                     ),
                   ),
-                ),
+                ],
               ),
             ),
             actions: [
               IconButton(
                 icon: const Icon(Icons.favorite_border),
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Added to wishlist'),
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                },
+                onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Added to wishlist')),
+                ),
               ),
             ],
           ),
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.all(16.0),
+              padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Expanded(
                         child: Text(
                           widget.product.name,
-                          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+                          style: Theme.of(context)
+                              .textTheme
+                              .headlineSmall
+                              ?.copyWith(fontWeight: FontWeight.bold),
                         ),
                       ),
                       Text(
                         '\$${widget.product.price.toStringAsFixed(2)}',
-                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
+                        style: Theme.of(context)
+                            .textTheme
+                            .headlineSmall
+                            ?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 24),
                   Text(
                     'Description',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
                   Text(
                     widget.product.description,
-                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      height: 1.5,
-                    ),
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyLarge
+                        ?.copyWith(height: 1.5),
                   ),
                   const SizedBox(height: 24),
                   Text(
                     'Quantity',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
                       Container(
                         decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                          color:
+                              Theme.of(context).colorScheme.primary.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Row(
                           children: [
                             IconButton(
                               icon: const Icon(Icons.remove),
-                              onPressed: _quantity > 1
-                                  ? () {
-                                      setState(() {
-                                        _quantity--;
-                                      });
-                                    }
-                                  : null,
                               color: Theme.of(context).colorScheme.primary,
+                              onPressed: _quantity > 1
+                                  ? () => setState(() => _quantity--)
+                                  : null,
                             ),
                             Text(
-                              _quantity.toString(),
-                              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
+                              '$_quantity',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.bold),
                             ),
                             IconButton(
                               icon: const Icon(Icons.add),
-                              onPressed: () {
-                                setState(() {
-                                  _quantity++;
-                                });
-                              },
                               color: Theme.of(context).colorScheme.primary,
+                              onPressed: () => setState(() => _quantity++),
                             ),
                           ],
                         ),
@@ -203,28 +240,28 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     ],
                   ),
                   const SizedBox(height: 32),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _isAddingToCart ? null : _addToCart,
-                          icon: _isAddingToCart
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(Icons.shopping_cart),
-                          label: const Text('Add to Cart'),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                          ),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _isAdding ? null : _addToCart,
+                      icon: _isAdding
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.shopping_cart),
+                      label: const Text('Add to Cart'),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
                         ),
                       ),
-                    ],
+                    ),
                   ),
                 ],
               ),
@@ -235,4 +272,3 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     );
   }
 }
-

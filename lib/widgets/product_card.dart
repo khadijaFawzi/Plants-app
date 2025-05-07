@@ -1,4 +1,7 @@
+// lib/widgets/product_card.dart
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../models/product.dart';
 
 class ProductCard extends StatelessWidget {
@@ -28,34 +31,34 @@ class ProductCard extends StatelessWidget {
           ],
         ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Hero(
               tag: 'product-${product.id}',
-              child: Container(
-                height: 150,
-                decoration: BoxDecoration(
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    topRight: Radius.circular(16),
-                  ),
-                  image: DecorationImage(
-                    image: AssetImage(product.image),
-                    fit: BoxFit.cover,
-                  ),
+              child: ClipRRect(
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
+                ),
+                child: AspectRatio(
+                  aspectRatio: 1,
+                  child: _buildImage(product.image),
                 ),
               ),
             ),
             Padding(
               padding: const EdgeInsets.all(12.0),
               child: Column(
+                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     product.name,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -74,11 +77,7 @@ class ProductCard extends StatelessWidget {
                     children: [
                       const Row(
                         children: [
-                          Icon(
-                            Icons.star,
-                            color: Colors.amber,
-                            size: 16,
-                          ),
+                          Icon(Icons.star, color: Colors.amber, size: 16),
                           SizedBox(width: 4),
                           Text(
                             '4.5',
@@ -91,11 +90,12 @@ class ProductCard extends StatelessWidget {
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
+                            horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withOpacity(0.1),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Text(
@@ -117,5 +117,36 @@ class ProductCard extends StatelessWidget {
       ),
     );
   }
-}
 
+  Widget _buildImage(String src) {
+    // 1) URL image
+    if (src.startsWith('http')) {
+      return CachedNetworkImage(
+        imageUrl: src,
+        fit: BoxFit.cover,
+        placeholder: (_, __) =>
+            const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        errorWidget: (_, __, ___) =>
+            Image.asset('assets/images/placeholder.png', fit: BoxFit.cover),
+      );
+    }
+
+    // 2) Local file path (e.g. cache)
+    if (src.startsWith('/') && File(src).existsSync()) {
+      return Image.file(
+        File(src),
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) =>
+            Image.asset('assets/images/placeholder.png', fit: BoxFit.cover),
+      );
+    }
+
+    // 3) Asset fallback
+    return Image.asset(
+      src.isNotEmpty ? src : 'assets/images/placeholder.png',
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) =>
+          Image.asset('assets/images/placeholder.png', fit: BoxFit.cover),
+    );
+  }
+}
